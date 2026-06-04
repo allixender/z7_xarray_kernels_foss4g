@@ -1,0 +1,59 @@
+[workspace]
+authors = ["Alexander Kmoch <alexander.kmoch@ut.ee>"]
+channels = ["conda-forge"]
+name = "igeo7_z7_xarray_paper"
+platforms = ["osx-arm64"]
+version = "0.1.0"
+
+[activation]
+env = { PYTHONPATH = "./src:.", DGGRID_PATH = "$CONDA_PREFIX/bin/dggrid" }
+
+[tasks]
+
+[dependencies]
+python = ">=3.12"
+# Core DGGS & Geospatial
+dggrid = ">=8.44,<9"
+geopandas = ">=0.9.0"
+shapely = ">=2.0.7"
+pyogrio = "0.11.*"
+pyproj = ">=3.3"
+rasterio = ">=1.4.3"
+rioxarray = ">=0.22.0,<0.23"
+cdshealpix = "*"
+healpix-geo = ">=0.0.9"
+h3ronpy = "*"
+lonboard = ">=0.9.3"
+
+# Data Analysis
+numpy = ">=2.0"
+pandas = ">=1.4.0"
+xarray = ">=2025.1.2"
+dask = ">=2025.2.0"
+distributed = ">=2025.11.0"
+zarr = "==2.18.3"
+numcodecs = ">=0.15.0"
+pyarrow = ">=23.0.1"
+scipy = "*"
+zstandard = "*"
+
+# Visualization & Notebooks
+jupyterlab = ">=4.5.6,<5"
+pixi-kernel = ">=0.7.1,<0.8"
+matplotlib = "*"
+
+# Others
+numba = "*"
+pooch = "*"
+cartopy = ">=0.25.0,<0.26"
+datashader = ">=0.19.0,<0.20"
+pytest = ">=9.0.3,<10"
+pytest-cov = ">=7.1.0,<8"
+
+[pypi-dependencies]
+dggrid4py = { path = "./dggrid4py", editable = true }
+xdggs = { path = "./xdggs", editable = true }
+xdggs-dggrid4py = { path = "./xdggs-dggrid4py", editable = true }
+xarray-spatial = { path = "./xarray-spatial", editable = true }
+pygeodesy = ">=25.10.10"
+arro3-core = ">=0.4.0"
