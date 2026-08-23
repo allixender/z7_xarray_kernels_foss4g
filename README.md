@@ -27,6 +27,10 @@ Supplement for the FOSS4G Europe conference academic article: the topic is the Z
 - XDGGS/Zarr Monotonic RangeIndex and storage layout
 - one compute example algorithm (slope)
 
+### Data on Zenodo
+
+Kmoch, A., Renoud, W., Jimenez Shaw, J., Chan, W. T., Chrapkiewicz, K., & Uuemaa, E. (2026). Supplemental data for FOSS4G Europe conference Z7 CPI/GBT indexing and neighbourhood (Version v1) [Data set]. Zenodo. https://doi.org/10.5281/zenodo.22067827
+
 
 ## Extended abstract
 
