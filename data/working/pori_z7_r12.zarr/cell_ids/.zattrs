@@ -1,9 +1,0 @@
-{
-    "_ARRAY_DIMENSIONS": [
-        "cell_ids"
-    ],
-    "grid_name": "igeo7",
-    "igeo7_dggs_vert0_lon": 11.2,
-    "igeo7_wgs84_geodetic_conversion": true,
-    "level": 12
-}

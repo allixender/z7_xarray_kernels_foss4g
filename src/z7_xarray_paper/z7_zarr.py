@@ -18,7 +18,7 @@ Convention reference:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal, Mapping
+from typing import Any, Iterable, Literal, Mapping
 
 import numpy as np
 import numba as nb
@@ -101,6 +101,75 @@ def find_monotonic_ranges(
     starts_idx = np.concatenate(([0], gap_idx + 1)).astype(np.int64)
     ends_idx   = np.concatenate((gap_idx, [n - 1])).astype(np.int64)
     return cell_ids_uint64[starts_idx], cell_ids_uint64[ends_idx]
+
+
+def find_monotonic_ranges_from_monotonic(
+    sorted_mono: np.ndarray,
+    level: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute contiguous ranges from an already-sorted monotonic-int array.
+
+    Unlike :func:`find_monotonic_ranges` (which takes packed Z7 ids and
+    converts them itself), this accepts the monotonic-int projection directly,
+    avoiding a second pass when the caller has already projected to the
+    monotonic number line (e.g. for out-of-core sorting where the key array is
+    what was sorted).
+
+    Returns
+    -------
+    range_start_z7, range_end_z7 : uint64[R] packed Z7 ids at each range's
+        first and last (inclusive) cell.
+    """
+    sorted_mono = np.ascontiguousarray(sorted_mono, dtype=np.uint64)
+    n = sorted_mono.size
+    if n == 0:
+        empty = np.empty(0, dtype=np.uint64)
+        return empty, empty
+    if sorted_mono.ndim != 1:
+        raise ValueError("sorted_mono must be 1-D")
+
+    diffs = np.diff(sorted_mono.astype(np.int64))
+    if (diffs < 0).any():
+        raise ValueError("monotonic ints are not sorted ascending")
+    gap_idx = np.flatnonzero(diffs != 1)
+    starts_idx = np.concatenate(([0], gap_idx + 1)).astype(np.int64)
+    ends_idx   = np.concatenate((gap_idx, [n - 1])).astype(np.int64)
+    range_start_mono = sorted_mono[starts_idx]
+    range_end_mono   = sorted_mono[ends_idx]
+    range_start_z7 = monotonic_int_to_z7_batch(range_start_mono, level)
+    range_end_z7   = monotonic_int_to_z7_batch(range_end_mono, level)
+    return range_start_z7, range_end_z7
+
+
+def expand_monotonic_ranges(range_table: np.ndarray, level: int) -> np.ndarray:
+    """Expand a (R, 2) packed-Z7 range table into the dense length-N cell ids.
+
+    Inverse of the ranges compression: reconstructs the full sorted
+    ``uint64[N]`` cell-ids array from ``(start_z7, end_z7_inclusive)`` pairs.
+    Useful to materialise a dense ``cell_ids`` coordinate on disk so a ranges
+    archive is also decodable by stock ``xdggs.decode`` (which requires a 1-D
+    cell-id coordinate), while the lazy ``Z7MonotonicIndex`` path keeps using
+    the compact range table.
+    """
+    range_table = np.ascontiguousarray(range_table, dtype=np.uint64)
+    if range_table.ndim != 2 or range_table.shape[1] != 2:
+        raise ValueError(f"range_table must be (R, 2) uint64, got {range_table.shape}")
+    if range_table.size == 0:
+        return np.empty(0, dtype=np.uint64)
+
+    starts = z7_to_monotonic_int_batch(range_table[:, 0], level)
+    ends   = z7_to_monotonic_int_batch(range_table[:, 1], level)
+    lengths = (ends - starts + np.uint64(1)).astype(np.int64)
+    offsets = np.concatenate(([0], np.cumsum(lengths))).astype(np.int64)
+    n = int(offsets[-1])
+
+    mono = np.empty(n, dtype=np.uint64)
+    for i in range(len(starts)):
+        s = int(starts[i])
+        mono[offsets[i]:offsets[i + 1]] = np.arange(
+            s, s + int(lengths[i]), dtype=np.uint64
+        )
+    return monotonic_int_to_z7_batch(mono, level)
 
 
 # ---------------------------------------------------------------------------
@@ -244,8 +313,22 @@ def write(
     # Apply project-default Blosc/zstd to every array. Beats xarray's default
     # Blosc/LZ4 by ~2× on DEM-style float32 and dramatically more on the
     # uint64 cell_ids / cell_id_ranges (sorted, mostly-shared high bits).
+    #
+    # Explicit `chunks` in the encoding, not just `ds.chunk(...)`: xarray does
+    # not dask-back index/dimension-coordinate variables (here, the dense
+    # `cell_ids` coord under compression="none"), so `.chunk()` alone leaves
+    # them as plain numpy and `to_zarr` falls back to zarr's own auto-guessed
+    # chunk size (~1 MB) regardless of the requested chunk_cells.
     compressor = default_compressor()
-    encoding = {name: {"compressor": compressor} for name in ds.variables}
+    spatial_dim = _DEFAULT_SPATIAL_DIMENSION
+    encoding = {}
+    for name, var in ds.variables.items():
+        enc: dict[str, Any] = {"compressor": compressor}
+        if spatial_dim in var.dims:
+            enc["chunks"] = tuple(
+                chunk_cells if d == spatial_dim else var.sizes[d] for d in var.dims
+            )
+        encoding[name] = enc
 
     ds.to_zarr(str(path), mode="w-", encoding=encoding, consolidated=False)
     return path
@@ -283,6 +366,125 @@ def _build_compression_ranges(*, cell_ids, data, level, dggs_vert0_lon, chunk_ce
         },
     )
     return ds.chunk({spatial_dim: chunk_cells})
+
+
+def write_ranges_stream(
+    path: str | Path,
+    *,
+    level: int,
+    n_cells: int,
+    cell_id_ranges: np.ndarray,
+    variables: Iterable[tuple[str, np.ndarray]],
+    chunk_cells: int = DEFAULT_CHUNK_CELLS,
+    dggs_vert0_lon: float = 11.20,
+    dggs_vert0_lat: float = 58.28252559,
+    dggs_vert0_azimuth: float = 0.0,
+    extra_attrs: Mapping | None = None,
+    include_dense_cell_ids: bool = False,
+) -> Path:
+    """Write a dggs-convention ``compression: "ranges"`` archive streaming.
+
+    Generic out-of-core counterpart to :func:`write` for the ``"ranges"``
+    form. The caller supplies the (R, 2) packed-Z7 range table plus an
+    iterator of ``(name, array)`` pairs, where each array is 1-D, length
+    ``n_cells``, and already sorted ascending by Z7 monotonic int (i.e. in the
+    same order the range table was derived from). Variables are written to the
+    store one at a time so peak memory is a single column plus the range table,
+    not the whole dataset.
+
+    By default the dense ``cell_ids`` array is **omitted** — only the (R, 2)
+    ``cell_id_ranges`` coordinate (carrying the canonical ``grid_name`` /
+    ``level`` / ``igeo7_*`` metadata) and the data variables are stored, exactly
+    like the ``pori_z7_*_ranges.zarr`` archives. This keeps on-disk size and
+    memory independent of N, which matters as area and resolution scale up.
+    Set ``include_dense_cell_ids=True`` to additionally write the length-N
+    ``cell_ids`` coordinate (reconstructed via :func:`expand_monotonic_ranges`)
+    for interop with stock ``xdggs.decode``, which requires a 1-D cell-id coord.
+    No dataset-specific assumptions are made — any Z7-indexed data works,
+    hence it lives here rather than in a dataset-specific package.
+    """
+    path = Path(path)
+    if path.exists():
+        raise FileExistsError(f"refusing to overwrite existing path: {path}")
+
+    cell_id_ranges = np.ascontiguousarray(cell_id_ranges, dtype=np.uint64)
+    if cell_id_ranges.ndim != 2 or cell_id_ranges.shape[1] != 2:
+        raise ValueError(
+            f"cell_id_ranges must be (R, 2) uint64, got shape {cell_id_ranges.shape}"
+        )
+    n_cells = int(n_cells)
+    if n_cells < 0:
+        raise ValueError("n_cells must be >= 0")
+
+    import zarr
+
+    compressor = default_compressor()
+    store = zarr.DirectoryStore(str(path))
+    root = zarr.group(store=store, overwrite=False)
+
+    root.attrs["dggs"] = _dggs_block(
+        level=level,
+        spatial_dimension=_DEFAULT_SPATIAL_DIMENSION,
+        coordinate=_RANGES_COORD_NAME,
+        compression="ranges",
+        dggs_vert0_lon=dggs_vert0_lon,
+        dggs_vert0_lat=dggs_vert0_lat,
+        dggs_vert0_azimuth=dggs_vert0_azimuth,
+    )
+    root.attrs["zarr_conventions"] = [DGGS_CONVENTION_REGISTRATION]
+    if extra_attrs:
+        for k, v in dict(extra_attrs).items():
+            root.attrs[k] = v
+
+    coord_attrs = _coord_attrs_for_xdggs(level=level, dggs_vert0_lon=dggs_vert0_lon)
+    r = cell_id_ranges.shape[0]
+    ranges_arr = root.create_dataset(
+        _RANGES_COORD_NAME,
+        shape=(r, 2),
+        chunks=(r, 2),
+        dtype=np.uint64,
+        compressor=compressor,
+        fill_value=None,
+    )
+    ranges_arr.attrs["_ARRAY_DIMENSIONS"] = [_RANGES_DIM_NAME, _RANGES_BOUNDS_DIM]
+    ranges_arr.attrs.update(coord_attrs)
+    ranges_arr[:, :] = cell_id_ranges
+
+    if include_dense_cell_ids:
+        dense_ids = expand_monotonic_ranges(cell_id_ranges, level)
+        cell_ids_arr = root.create_dataset(
+            _DEFAULT_SPATIAL_DIMENSION,
+            shape=(n_cells,),
+            chunks=(int(chunk_cells),),
+            dtype=np.uint64,
+            compressor=compressor,
+            fill_value=None,
+        )
+        cell_ids_arr.attrs["_ARRAY_DIMENSIONS"] = [_DEFAULT_SPATIAL_DIMENSION]
+        cell_ids_arr.attrs.update(coord_attrs)
+        cell_ids_arr[:] = dense_ids
+        del dense_ids
+
+    for name, arr in variables:
+        arr = np.asarray(arr)
+        if arr.ndim != 1 or arr.shape[0] != n_cells:
+            raise ValueError(
+                f"variable {name!r} must be 1-D of length n_cells={n_cells}, "
+                f"got shape {arr.shape}"
+            )
+        fill = np.nan if np.issubdtype(arr.dtype, np.floating) else None
+        data_arr = root.create_dataset(
+            name,
+            shape=(n_cells,),
+            chunks=(int(chunk_cells),),
+            dtype=arr.dtype,
+            compressor=compressor,
+            fill_value=fill,
+        )
+        data_arr.attrs["_ARRAY_DIMENSIONS"] = [_DEFAULT_SPATIAL_DIMENSION]
+        data_arr[:] = arr
+
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -359,5 +561,10 @@ def _decode_ranges(ds: xr.Dataset) -> xr.Dataset:
     # Drop the (R, 2) variable and the now-unused range/bounds dims;
     # the index supplies a lazy length-N `cell_ids` coord via
     # `Z7MonotonicIndex.create_variables`. `from_xindex` wires that up.
-    ds = ds.drop_vars(_RANGES_COORD_NAME)
+    # Also drop any dense `cell_ids` coord the writer may have added for
+    # stock-`xdggs.decode` interop, so it doesn't clash with the lazy one.
+    drop = [_RANGES_COORD_NAME]
+    if spatial_dim in ds.variables:
+        drop.append(spatial_dim)
+    ds = ds.drop_vars(drop)
     return ds.assign_coords(xr.Coordinates.from_xindex(index))
