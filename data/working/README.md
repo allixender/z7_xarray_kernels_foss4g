@@ -2,8 +2,7 @@
 
 Intermediate and worked-example DGGS Zarr archives (IGEO7/Z7 grid, [DGGS Zarr
 Convention v1](https://github.com/zarr-conventions/dggs/blob/v1/README.md))
-plus supporting lookup tables. These are the archives Phase 1-3 of `AGENT.md`
-and the FOSS4G paper build on and benchmark against. Each `.zarr` is a
+plus supporting lookup tables. These are the archives of the FOSS4G paper build on and benchmark against. Each `.zarr` is a
 directory store (Zarr v2) — deposit it as a zipped folder on Zenodo, not as
 individual files.
 
@@ -33,18 +32,13 @@ requires the project's `z7_xarray_paper.z7_zarr.open_dataset()` (or the
 | `eesti_z7_r12_ranges.zarr` | Same archive, ranges-compressed; chunked at `7**8` cells/chunk (3 chunks). Source for the end-to-end slope benchmark and the worked slope example below. |
 | `eesti_z7_r12_slope_ranges.zarr` | **The FOSS4G paper's worked example output.** Slope (FDA, units m/m) computed from `elevation_mean` over the full Estonia res12 archive (`scripts/slope_eesti_r12_blocked.py`), written back as a ranges-compressed archive paired with `eesti_z7_r12_ranges.zarr`. 78,339 of 11,853,867 cells are `NaN` (AOI-boundary and pentagon cells). Intended for standalone publication alongside its source archive. |
 
-## eesti_soil_z7/
-
-Separate multi-resolution Estonia soils/land-cover/vegetation dataset (res07
-through res12) — see `data/working/eesti_soil_z7/README.md`.
 
 ## Other files
 
 | File | Description |
 |---|---|
-| `dist_lookup_level4.parquet` | Per-cell axis-distance correction lookup table at IGEO7 res4, derived from the global level-4 ISEA7H anisotropy sweep. Used by the slope FDA kernel in `distance_mode="lookup"` to correct neighbour distances for icosahedral shape distortion (see `AGENT.md` Science backlog item B1). |
+| `dist_lookup_level4.parquet` | Per-cell axis-distance correction lookup table at IGEO7 res4, derived from the global level-4 ISEA7H anisotropy sweep. Used by the slope FDA kernel in `distance_mode="lookup"` to correct neighbour distances for icosahedral shape distortion. |
 | `igeo7_zonal_res12_eesti_dem_merged.parquet` | Intermediate zonal-statistics table: Estonia DEM elevation aggregated onto IGEO7 res12 cells by an external zonal-stats step (9 stat columns + `z7int` cell id + a redundant `name` string). Source for `eesti_z7_r12*.zarr` via `scripts/build_eesti_dem_res12_zarr.py`. |
-| `pori_dem_slope_qgis.qgz` | QGIS project file for visually inspecting the Pori DEM/slope raster layers. Not a data product — a viewer convenience file. |
 
 ## License
 

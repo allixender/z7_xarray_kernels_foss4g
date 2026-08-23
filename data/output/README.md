@@ -2,8 +2,7 @@
 
 Benchmark results, validation statistics, figures, and IGEO7 cell-geometry
 exports produced by the scripts in `scripts/`. These are the numbers and
-plots referenced by the FOSS4G Europe 2026 paper's Results section (see
-`overleaf_foss4g_europe_2026_paper_latex/main.tex`).
+plots referenced by the FOSS4G Europe 2026 paper's Results section.
 
 ## Benchmarks (paper Section 5)
 
@@ -21,7 +20,7 @@ plots referenced by the FOSS4G Europe 2026 paper's Results section (see
 
 | File(s) | Produced by | Description |
 |---|---|---|
-| `validate_slope_synthetic.csv`, `validate_slope_synthetic.parquet`, `validate_slope_synthetic_summary.json` | `scripts/validate_slope_synthetic.py` | FDA slope kernel validated against closed-form analytic slope (tilted plane, paraboloid) over the Pori AOI at IGEO7 res 10-13. Source of the parity-dependent ISEA distortion finding recorded in `AGENT.md` (item B1). |
+| `validate_slope_synthetic.csv`, `validate_slope_synthetic.parquet`, `validate_slope_synthetic_summary.json` | `scripts/validate_slope_synthetic.py` | FDA slope kernel validated against closed-form analytic slope (tilted plane, paraboloid) over the Pori AOI at IGEO7 res 10-13. |
 
 ## Global ISEA7H anisotropy sweep (Phase 3a)
 
